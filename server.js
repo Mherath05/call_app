@@ -88,8 +88,8 @@ io.on('connection', (socket) => {
 
   // 3. WebRTC Call Offer (Client -> Admin)
   socket.on('offer-call', (data) => {
-    const { callerId, callerName, offerSdp } = data;
-    console.log(`[Call Offer] From Client ${callerName || callerId} (${callerId}) to Admin ${adminUserId}`);
+    const { callerId, callerName, isVideoCall, offerSdp } = data;
+    console.log(`[Call Offer] From Client ${callerName || callerId} (${callerId}) to Admin ${adminUserId} [Video: ${!!isVideoCall}]`);
 
     if (!isAdminOnline()) {
       socket.emit('call-rejected', {
@@ -102,6 +102,7 @@ io.on('connection', (socket) => {
     io.to(adminSocketId).emit('incoming-call', {
       callerId: callerId,
       callerName: callerName || 'Client',
+      isVideoCall: !!isVideoCall,
       callerSocketId: socket.id,
       offerSdp: offerSdp
     });
@@ -109,15 +110,18 @@ io.on('connection', (socket) => {
 
   // 4. WebRTC Call Answer (Admin -> Client)
   socket.on('answer-call', (data) => {
-    const { callerId, answerSdp } = data;
-    console.log(`[Call Answered] Admin answered call from Client ${callerId}`);
+    const { callerId, callerSocketId, answerSdp } = data;
+    console.log(`[Call Answered] Admin answered call from Client ${callerId} (Socket: ${callerSocketId || 'unknown'})`);
 
     const clientUser = activeUsers.get(callerId);
-    if (clientUser && clientUser.socketId) {
-      io.to(clientUser.socketId).emit('call-accepted', {
+    const targetSocketId = (clientUser && clientUser.socketId) ? clientUser.socketId : callerSocketId;
+
+    if (targetSocketId) {
+      io.to(targetSocketId).emit('call-accepted', {
         adminId: adminUserId,
         answerSdp: answerSdp
       });
+      console.log(`[Call Answered] Sent call-accepted to socket ${targetSocketId}`);
     } else {
       console.log(`[Call Answer Error] Client socket for ${callerId} not found`);
     }
@@ -125,12 +129,14 @@ io.on('connection', (socket) => {
 
   // 5. ICE Candidate Exchange (Bidirectional)
   socket.on('ice-candidate', (data) => {
-    const { targetId, candidate } = data;
+    const { targetId, targetSocketId, candidate } = data;
     const targetUser = activeUsers.get(targetId);
+    const destinationSocketId = (targetUser && targetUser.socketId) ? targetUser.socketId : targetSocketId;
 
-    if (targetUser && targetUser.socketId) {
-      io.to(targetUser.socketId).emit('ice-candidate', {
+    if (destinationSocketId) {
+      io.to(destinationSocketId).emit('ice-candidate', {
         senderId: socket.userId,
+        senderSocketId: socket.id,
         candidate: candidate
       });
     }
@@ -138,12 +144,14 @@ io.on('connection', (socket) => {
 
   // 6. Call Rejection (Admin -> Client)
   socket.on('reject-call', (data) => {
-    const { callerId, reason } = data;
+    const { callerId, callerSocketId, reason } = data;
     console.log(`[Call Rejected] Admin rejected call from ${callerId}`);
 
     const clientUser = activeUsers.get(callerId);
-    if (clientUser && clientUser.socketId) {
-      io.to(clientUser.socketId).emit('call-rejected', {
+    const targetSocketId = (clientUser && clientUser.socketId) ? clientUser.socketId : callerSocketId;
+
+    if (targetSocketId) {
+      io.to(targetSocketId).emit('call-rejected', {
         reason: reason || 'Admin declined the call.'
       });
     }
@@ -151,12 +159,14 @@ io.on('connection', (socket) => {
 
   // 7. End Call (Either party)
   socket.on('end-call', (data) => {
-    const { targetId } = data;
+    const { targetId, targetSocketId } = data;
     console.log(`[Call Ended] Socket ${socket.id} ended call with ${targetId}`);
 
     const targetUser = activeUsers.get(targetId);
-    if (targetUser && targetUser.socketId) {
-      io.to(targetUser.socketId).emit('call-ended', {
+    const destinationSocketId = (targetUser && targetUser.socketId) ? targetUser.socketId : targetSocketId;
+
+    if (destinationSocketId) {
+      io.to(destinationSocketId).emit('call-ended', {
         by: socket.userId
       });
     }
