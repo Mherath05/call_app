@@ -119,6 +119,7 @@ io.on('connection', (socket) => {
     if (targetSocketId) {
       io.to(targetSocketId).emit('call-accepted', {
         adminId: adminUserId,
+        adminSocketId: adminSocketId,
         answerSdp: answerSdp
       });
       console.log(`[Call Answered] Sent call-accepted to socket ${targetSocketId}`);
@@ -130,8 +131,19 @@ io.on('connection', (socket) => {
   // 5. ICE Candidate Exchange (Bidirectional)
   socket.on('ice-candidate', (data) => {
     const { targetId, targetSocketId, candidate } = data;
-    const targetUser = activeUsers.get(targetId);
-    const destinationSocketId = (targetUser && targetUser.socketId) ? targetUser.socketId : targetSocketId;
+    let destinationSocketId = targetSocketId;
+
+    if (!destinationSocketId && targetId) {
+      const targetUser = activeUsers.get(targetId);
+      if (targetUser) {
+        destinationSocketId = targetUser.socketId;
+      }
+    }
+
+    // Fallback if client is sending ICE candidates to Admin
+    if (!destinationSocketId && (socket.role === 'client' || targetId === 'admin_user_id')) {
+      destinationSocketId = adminSocketId;
+    }
 
     if (destinationSocketId) {
       io.to(destinationSocketId).emit('ice-candidate', {
@@ -139,6 +151,8 @@ io.on('connection', (socket) => {
         senderSocketId: socket.id,
         candidate: candidate
       });
+    } else {
+      console.log(`[ICE Candidate Error] Destination socket for target ${targetId} not found`);
     }
   });
 
@@ -160,15 +174,31 @@ io.on('connection', (socket) => {
   // 7. End Call (Either party)
   socket.on('end-call', (data) => {
     const { targetId, targetSocketId } = data;
-    console.log(`[Call Ended] Socket ${socket.id} ended call with ${targetId}`);
+    console.log(`[Call Ended] Socket ${socket.id} (${socket.role}) ended call with target ${targetId}`);
 
-    const targetUser = activeUsers.get(targetId);
-    const destinationSocketId = (targetUser && targetUser.socketId) ? targetUser.socketId : targetSocketId;
+    let destinationSocketId = targetSocketId;
+    if (!destinationSocketId && targetId) {
+      const targetUser = activeUsers.get(targetId);
+      if (targetUser) {
+        destinationSocketId = targetUser.socketId;
+      }
+    }
+
+    // Fallback if client ends call with Admin
+    if (!destinationSocketId && (socket.role === 'client' || targetId === 'admin_user_id')) {
+      destinationSocketId = adminSocketId;
+    }
 
     if (destinationSocketId) {
       io.to(destinationSocketId).emit('call-ended', {
         by: socket.userId
       });
+      console.log(`[Call Ended] Forwarded call-ended to socket ${destinationSocketId}`);
+    } else {
+      // Fallback broadcast to admin if available
+      if (adminSocketId && socket.id !== adminSocketId) {
+        io.to(adminSocketId).emit('call-ended', { by: socket.userId });
+      }
     }
   });
 
