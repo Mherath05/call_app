@@ -171,6 +171,29 @@ io.on('connection', (socket) => {
     }
   });
 
+  // 6b. Real-Time Text Message (Admin -> Client)
+  socket.on('send-text-message', (data) => {
+    const { targetId, targetSocketId, text } = data;
+    console.log(`[Text Message] From ${socket.userId} to ${targetId}: ${text}`);
+
+    let destinationSocketId = targetSocketId;
+    if (!destinationSocketId && targetId) {
+      const targetUser = activeUsers.get(targetId);
+      if (targetUser) {
+        destinationSocketId = targetUser.socketId;
+      }
+    }
+
+    if (destinationSocketId) {
+      io.to(destinationSocketId).emit('receive-text-message', {
+        senderId: socket.userId,
+        text: text
+      });
+    } else {
+      console.log(`[Text Message Error] Destination socket for ${targetId} not found`);
+    }
+  });
+
   // 7. End Call (Either party)
   socket.on('end-call', (data) => {
     const { targetId, targetSocketId } = data;
