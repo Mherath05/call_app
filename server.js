@@ -122,6 +122,7 @@ io.on('connection', (socket) => {
       callerSocketId: socket.id,
       offerSdp: offerSdp
     });
+    console.log(`[Call Offer] Forwarded to Admin socket ${adminSocketId}`);
   });
 
   // 4. WebRTC Call Answer (Admin -> Client)
@@ -129,8 +130,17 @@ io.on('connection', (socket) => {
     const { callerId, callerSocketId, answerSdp } = data;
     console.log(`[Call Answered] Admin answered call from Client ${callerId} (Socket: ${callerSocketId || 'unknown'})`);
 
-    const clientUser = activeUsers.get(callerId);
-    const targetSocketId = (clientUser && clientUser.socketId) ? clientUser.socketId : callerSocketId;
+    let targetSocketId = null;
+    if (callerSocketId && io.sockets.sockets.has(callerSocketId)) {
+      targetSocketId = callerSocketId;
+    }
+
+    if (!targetSocketId && callerId) {
+      const clientUser = activeUsers.get(callerId);
+      if (clientUser && clientUser.socketId && io.sockets.sockets.has(clientUser.socketId)) {
+        targetSocketId = clientUser.socketId;
+      }
+    }
 
     if (targetSocketId) {
       io.to(targetSocketId).emit('call-accepted', {
@@ -147,28 +157,35 @@ io.on('connection', (socket) => {
   // 5. ICE Candidate Exchange (Bidirectional)
   socket.on('ice-candidate', (data) => {
     const { targetId, targetSocketId, candidate } = data;
-    let destinationSocketId = targetSocketId;
+    let destinationSocketId = null;
+
+    if (targetSocketId && io.sockets.sockets.has(targetSocketId)) {
+      destinationSocketId = targetSocketId;
+    }
 
     if (!destinationSocketId && targetId) {
       const targetUser = activeUsers.get(targetId);
-      if (targetUser) {
+      if (targetUser && targetUser.socketId && io.sockets.sockets.has(targetUser.socketId)) {
         destinationSocketId = targetUser.socketId;
       }
     }
 
     // Fallback if client is sending ICE candidates to Admin
-    if (!destinationSocketId && (socket.role === 'client' || targetId === 'admin_user_id')) {
-      destinationSocketId = adminSocketId;
+    if (!destinationSocketId) {
+      if (socket.role === 'client' || targetId === 'admin_user_id' || targetId === adminUserId) {
+        destinationSocketId = adminSocketId;
+      }
     }
 
-    if (destinationSocketId) {
+    if (destinationSocketId && io.sockets.sockets.has(destinationSocketId)) {
       io.to(destinationSocketId).emit('ice-candidate', {
         senderId: socket.userId,
         senderSocketId: socket.id,
         candidate: candidate
       });
+      console.log(`[ICE Candidate] Forwarded from ${socket.userId || socket.id} to socket ${destinationSocketId}`);
     } else {
-      console.log(`[ICE Candidate Error] Destination socket for target ${targetId} not found`);
+      console.log(`[ICE Candidate Warning] Destination socket for target ${targetId || targetSocketId} not active`);
     }
   });
 
