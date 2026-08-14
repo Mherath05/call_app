@@ -38,13 +38,30 @@ function isAdminOnline() {
   return adminSocketId !== null && io.sockets.sockets.has(adminSocketId);
 }
 
+function getActiveClientCount() {
+  let count = 0;
+  for (const user of activeUsers.values()) {
+    if (user.role === 'client' && io.sockets.sockets.has(user.socketId)) {
+      count++;
+    }
+  }
+  return count;
+}
+
 function broadcastAdminStatus() {
   const isOnline = isAdminOnline();
-  io.emit('admin-status-changed', {
+  const activeClientCount = getActiveClientCount();
+
+  const payload = {
     isOnline: isOnline,
-    adminId: adminUserId
-  });
-  console.log(`[Presence] Broadcasted Admin Status: ${isOnline ? 'ONLINE' : 'OFFLINE'}`);
+    adminId: adminUserId,
+    activeClientCount: activeClientCount,
+    timestamp: Date.now()
+  };
+
+  io.emit('admin-status-changed', payload);
+  io.emit('presence-update', payload);
+  console.log(`[Presence] Broadcasted Presence: Admin=${isOnline ? 'ONLINE' : 'OFFLINE'}, Active Clients=${activeClientCount}`);
 }
 
 io.on('connection', (socket) => {
@@ -64,26 +81,25 @@ io.on('connection', (socket) => {
       adminSocketId = socket.id;
       adminUserId = userId;
       console.log(`[Admin Registered] Admin ID: ${userId} on Socket: ${socket.id}`);
-      broadcastAdminStatus();
     } else {
       console.log(`[Client Registered] Client ID: ${userId} on Socket: ${socket.id}`);
-      // Notify client of current Admin status immediately
-      socket.emit('admin-status-changed', {
-        isOnline: isAdminOnline(),
-        adminId: adminUserId
-      });
     }
+
+    broadcastAdminStatus();
   });
 
   // 2. Client queries Admin presence status
   socket.on('get-admin-status', (ackCallback) => {
     const isOnline = isAdminOnline();
-    const response = { isOnline, adminId: adminUserId };
+    const activeClientCount = getActiveClientCount();
+    const response = { isOnline, adminId: adminUserId, activeClientCount };
+    
     if (typeof ackCallback === 'function') {
       ackCallback(response);
-    } else {
-      socket.emit('admin-status-response', response);
     }
+    socket.emit('admin-status-response', response);
+    socket.emit('admin-status-changed', response);
+    socket.emit('presence-update', response);
   });
 
   // 3. WebRTC Call Offer (Client -> Admin)
